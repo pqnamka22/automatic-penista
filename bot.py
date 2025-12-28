@@ -1,4 +1,3 @@
-"8168424922:AAEi0QOsZ4iX9K0e7JiU1PiRqlIZIaXb4sc")
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ContentType
