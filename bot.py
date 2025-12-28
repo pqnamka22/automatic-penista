@@ -1,147 +1,155 @@
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ContentType
+from aiogram.types import ContentType
 from aiogram.utils import executor
-import asyncio
-from datetime import datetime
 
-TOKEN = "8168424922:AAEi0QOsZ4iX9K0e7JiU1PiRqlIZIaXb4sc"
-OWNER_ID = 8233512755  # Ваш Telegram user ID (int)
-
-bot = Bot(token=TOKEN)
+bot = Bot(token="8168424922:AAEi0QOsZ4iX9K0e7JiU1PiRqlIZIaXb4sc")
 dp = Dispatcher(bot)
 
-# Храним состояние, кто готов отправлять сообщение
-waiting_for_message = set()
+OWNER_ID = 8233512755  # ID владельца бота
+owner_replying_to = None  # ID пользователя, которому отвечает владелец
+chat_history = {}  # История чатов
+waiting_for_message = set()  # Пользователи, ожидающие ответа
 
-# Храним чат: {user_id: [{"from": "user"/"owner", "content": ..., "type": "text"/"photo"}]}
-chat_history = {}
-
-# Храним, кому владелец сейчас отвечает
-owner_replying_to = None
-
-# Клавиатура с кнопкой "Отправить сооб!"
-def main_kb():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Отправить сооб!", callback_data="send_message"))
-    return kb
-
-# Клавиатура для владельца с кнопкой ответить
 def owner_reply_kb(user_id):
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Ответить на сообщение от имени бота", callback_data=f"reply_{user_id}"))
-    return kb
-
-# Клавиатура отмены для владельца
-def cancel_reply_kb():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("❌ Отменить ответ", callback_data="cancel_reply"))
-    return kb
-
-@dp.message_handler(commands=["start"])
-async def start_handler(message: types.Message):
-    await message.answer("Привет! Нажми на кнопку отправить сооб!", reply_markup=main_kb())
-    chat_history.setdefault(message.from_user.id, [])
-
-@dp.callback_query_handler(lambda c: c.data == "send_message")
-async def callback_send_message(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    waiting_for_message.add(user_id)
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(user_id, "Кидай сюда все что хочешь увидеть в подслушке @tgk1103")
-
-@dp.callback_query_handler(lambda c: c.data.startswith("reply_"))
-async def callbacks_reply(callback_query: types.CallbackQuery):
-    global owner_replying_to
-    await bot.answer_callback_query(callback_query.id)
-    user_id = int(callback_query.data.split("_")[1])
-    
-    # Запоминаем, кому отвечаем
-    owner_replying_to = user_id
-    
-    # Показываем последние сообщения для контекста
-    context_msg = ""
-    if user_id in chat_history:
-        recent = chat_history[user_id][-5:]
-        msg_text = "\n".join(f"{'👤 Пользователь' if m['from']=='user' else '🤖 Бот'}: {m['content']}" for m in recent if m['type']=='text')
-        if msg_text:
-            context_msg = f"\n\nПоследние сообщения:\n{msg_text}"
-    
-    await bot.send_message(
-        callback_query.from_user.id,
-        f"✍️ Режим ответа активирован!\n\nПросто напишите сообщение, и оно будет отправлено пользователю.{context_msg}",
-        reply_markup=cancel_reply_kb()
+    # Клавиатура для владельца для ответа пользователю
+    return types.InlineKeyboardMarkup().add(
+        types.InlineKeyboardButton(text="Ответить", callback_data=f"reply_{user_id}")
     )
 
-@dp.callback_query_handler(lambda c: c.data == "cancel_reply")
-async def callback_cancel_reply(callback_query: types.CallbackQuery):
-    global owner_replying_to
-    await bot.answer_callback_query(callback_query.id)
-    owner_replying_to = None
-    await bot.send_message(callback_query.from_user.id, "❌ Режим ответа отменён.")
-
-@dp.message_handler(content_types=[ContentType.TEXT, ContentType.PHOTO])
+@dp.message_handler(content_types=[ContentType.TEXT, ContentType.PHOTO, ContentType.VIDEO, ContentType.VIDEO_NOTE])
 async def message_handler(message: types.Message):
     global owner_replying_to
     user_id = message.from_user.id
 
-    # Обработка сообщений от владельца (ID=OWNER_ID) для ответов
+    # Если сообщение от владельца и он отвечает конкретному пользователю
     if user_id == OWNER_ID:
         if owner_replying_to:
             to_user = owner_replying_to
-            # Отправляем ответ пользователю от имени бота
-            if message.text:
+            # Отправляем текст без других медиа
+            if message.text and not (message.photo or message.video or message.video_note):
                 await bot.send_message(to_user, message.text)
                 chat_history.setdefault(to_user, []).append({"from": "owner", "type": "text", "content": message.text})
+
+            # Фото с подписью
             if message.photo:
                 photo = message.photo[-1]
-                await bot.send_photo(to_user, photo.file_id)
-                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "photo", "content": photo.file_id})
-            
-            # Сбрасываем режим ответа
-            owner_replying_to = None
-            await message.answer("✅ Ответ отправлен!")
-        else:
-            await message.answer("Нажмите кнопку «Ответить» под сообщением пользователя, чтобы ответить.")
-        return
+                caption = message.caption or ""
+                await bot.send_photo(to_user, photo.file_id, caption=caption)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "photo", "content": photo.file_id, "caption": caption})
 
-    # Проверяем, ожидаем ли от пользователя сообщение
-    if user_id not in waiting_for_message:
-        return  # Игнорируем все, если не нажимали кнопку
+            # Видео с подписью
+            if message.video:
+                video = message.video
+                caption = message.caption or ""
+                await bot.send_video(to_user, video.file_id, caption=caption)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "video", "content": video.file_id, "caption": caption})
 
-    # Сохраняем в историю
-    entries = []
-    if message.text:
-        entries.append({"from": "user", "type": "text", "content": message.text})
+            # Видео-кружок (video_note) без подписи
+            if message.video_note:
+                video_note = message.video_note
+                await bot.send_video_note(to_user, video_note.file_id)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "video_note", "content": video_note.file_id})
 
-    if message.photo:
-        # Берём максимальное качество
-        photo = message.photo[-1]
-        entries.append({"from": "user", "type": "photo", "content": photo.file_id})
+    else:
+        # Сообщение от пользователя — сохраняем и пересылаем владельцу
+        if message.text:
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "text", "content": message.text})
+            await bot.send_message(OWNER_ID, f"Сообщение от {user_id}: {message.text}", reply_markup=owner_reply_kb(user_id))
 
-    if not entries:
-        await message.reply("Пожалуйста, отправьте текст и/или фото.")
-        return
+        elif message.photo:
+            photo = message.photo[-1]
+            caption = message.caption or ""
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "photo", "content": photo.file_id, "caption": caption})
+            await bot.send_photo(OWNER_ID, photo.file_id, caption=f"От пользователя {user_id}\n{caption}", reply_markup=owner_reply_kb(user_id))
 
-    chat_history.setdefault(user_id, []).extend(entries)
-    waiting_for_message.discard(user_id)
-    await message.reply("Сообщение отправлено!")
+        elif message.video:
+            video = message.video
+            caption = message.caption or ""
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "video", "content": video.file_id, "caption": caption})
+            await bot.send_video(OWNER_ID, video.file_id, caption=f"От пользователя {user_id}\n{caption}", reply_markup=owner_reply_kb(user_id))
 
-    # Формируем уведомление для владельца
-    user_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
-    dt_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-    intro = f"Новое сообщение!\nОт: {user_name}\nДата, время: {dt_str}"
+        elif message.video_note:
+            video_note = message.video_note
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "video_note", "content": video_note.file_id})
+            await bot.send_video_note(OWNER_ID, video_note.file_id, reply_markup=owner_reply_kb(user_id))
 
-    # Отправляем текстовое уведомление с кнопкой ответить
-    inline_kb = owner_reply_kb(user_id)
-    await bot.send_message(OWNER_ID, intro, reply_markup=inline_kb)
+if name == "__main__":
+    executor.start_polling(dp)
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ContentType
+from aiogram.utils import executor
 
-    # Перешлём сообщения (текст и фото) владельцу
-    for item in entries:
-        if item["type"] == "text":
-            await bot.send_message(OWNER_ID, item["content"])
-        elif item["type"] == "photo":
-            await bot.send_photo(OWNER_ID, item["content"], caption="Фото от пользователя")
+bot = Bot(token="8168424922:AAEi0QOsZ4iX9K0e7JiU1PiRqlIZIaXb4sc")
+dp = Dispatcher(bot)
 
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+OWNER_ID = 8233512755  # ID владельца бота
+owner_replying_to = None  # ID пользователя, которому отвечает владелец
+chat_history = {}  # История чатов
+waiting_for_message = set()  # Пользователи, ожидающие ответа
 
+def owner_reply_kb(user_id):
+    # Клавиатура для владельца для ответа пользователю
+    return types.InlineKeyboardMarkup().add(
+        types.InlineKeyboardButton(text="Ответить", callback_data=f"reply_{user_id}")
+    )
+
+@dp.message_handler(content_types=[ContentType.TEXT, ContentType.PHOTO, ContentType.VIDEO, ContentType.VIDEO_NOTE])
+async def message_handler(message: types.Message):
+    global owner_replying_to
+    user_id = message.from_user.id
+
+    # Если сообщение от владельца и он отвечает конкретному пользователю
+    if user_id == OWNER_ID:
+        if owner_replying_to:
+            to_user = owner_replying_to
+            # Отправляем текст без других медиа
+            if message.text and not (message.photo or message.video or message.video_note):
+                await bot.send_message(to_user, message.text)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "text", "content": message.text})
+
+            # Фото с подписью
+            if message.photo:
+                photo = message.photo[-1]
+                caption = message.caption or ""
+                await bot.send_photo(to_user, photo.file_id, caption=caption)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "photo", "content": photo.file_id, "caption": caption})
+
+            # Видео с подписью
+            if message.video:
+                video = message.video
+                caption = message.caption or ""
+                await bot.send_video(to_user, video.file_id, caption=caption)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "video", "content": video.file_id, "caption": caption})
+
+            # Видео-кружок (video_note) без подписи
+            if message.video_note:
+                video_note = message.video_note
+                await bot.send_video_note(to_user, video_note.file_id)
+                chat_history.setdefault(to_user, []).append({"from": "owner", "type": "video_note", "content": video_note.file_id})
+
+    else:
+        # Сообщение от пользователя — сохраняем и пересылаем владельцу
+        if message.text:
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "text", "content": message.text})
+            await bot.send_message(OWNER_ID, f"Сообщение от {user_id}: {message.text}", reply_markup=owner_reply_kb(user_id))
+
+        elif message.photo:
+            photo = message.photo[-1]
+            caption = message.caption or ""
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "photo", "content": photo.file_id, "caption": caption})
+            await bot.send_photo(OWNER_ID, photo.file_id, caption=f"От пользователя {user_id}\n{caption}", reply_markup=owner_reply_kb(user_id))
+
+        elif message.video:
+            video = message.video
+            caption = message.caption or ""
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "video", "content": video.file_id, "caption": caption})
+            await bot.send_video(OWNER_ID, video.file_id, caption=f"От пользователя {user_id}\n{caption}", reply_markup=owner_reply_kb(user_id))
+
+        elif message.video_note:
+            video_note = message.video_note
+            chat_history.setdefault(user_id, []).append({"from": "user", "type": "video_note", "content": video_note.file_id})
+            await bot.send_video_note(OWNER_ID, video_note.file_id, reply_markup=owner_reply_kb(user_id))
+
+if name == "__main__":
+    executor.start_polling(dp)
+    
